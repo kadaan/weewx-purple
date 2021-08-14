@@ -77,16 +77,11 @@ weewx.units.obs_group_dict['pm2_5_aqi'] = 'air_quality_index'
 weewx.units.obs_group_dict['pm2_5_aqi_color'] = 'air_quality_color'
 
 class Source:
-    def __init__(self, config_dict, name, is_proxy):
-        self.is_proxy = is_proxy
+    def __init__(self, config_dict, name):
         # Raise KeyEror if name not in dictionary.
         source_dict = config_dict[name]
         self.enable = to_bool(source_dict.get('enable', False))
-        self.hostname = source_dict.get('hostname', '')
-        if is_proxy:
-            self.port = to_int(source_dict.get('port', 8000))
-        else:
-            self.port = to_int(source_dict.get('port', 80))
+        self.sensor_id = source_dict.get('sensor_id', '')
         self.timeout  = to_int(source_dict.get('timeout', 10))
 
 @dataclass
@@ -120,18 +115,16 @@ def utc_now():
 def get_concentrations(cfg: Configuration):
     for source in cfg.sources:
         if source.enable:
-            record = collect_data(source.hostname,
-                                  source.port,
+            record = collect_data(source.sensor_id,
                                   source.timeout,
-                                  cfg.archive_interval,
-                                  source.is_proxy)
+                                  cfg.archive_interval)
             if record is not None:
                 log.debug('get_concentrations: source: %s' % record)
                 reading_ts = to_int(record['dateTime'])
                 age_of_reading = time.time() - reading_ts
                 if age_of_reading > cfg.archive_interval:
-                    log.info('Reading from %s:%d is old: %d seconds.' % (
-                        source.hostname, source.port, age_of_reading))
+                    log.info('Reading from %s is old: %d seconds.' % (
+                        source.sensor_id, age_of_reading))
                     continue
                 concentrations = Concentrations(
                     timestamp        = reading_ts,
@@ -198,40 +191,28 @@ def is_sane(j: Dict[str, Any]) -> bool:
 
     return True
 
-def collect_data(hostname, port, timeout, archive_interval, proxy = False):
+def collect_data(sensor_id, timeout, archive_interval):
 
     j = None
-    if proxy:
-        url = 'http://%s:%s/fetch-current-record' % (hostname, port)
-    else:
-        url = 'http://%s:%s/json' % (hostname, port)
+    url = 'https://www.purpleair.com/json?show=%s' % (sensor_id)
 
     try:
         # fetch data
         log.debug('collect_data: fetching from url: %s, timeout: %d' % (url, timeout))
         r = requests.get(url=url, timeout=timeout)
         r.raise_for_status()
-        log.debug('collect_data: %s returned %r' % (hostname, r))
+        log.debug('collect_data: %s returned %r' % (sensor_id, r))
         if r:
             # convert to json
             j = r.json()
-            log.debug('collect_data: json returned from %s is: %r' % (hostname, j))
+            log.debug('collect_data: json returned from %s is: %r' % (sensor_id, j))
             time_of_reading = datetime_from_reading(j['DateTime'])
             # Check for sanity
             if not is_sane(j):
                 log.info('purpleair reading not sane: %s' % j)
                 return None
-            # If proxy, the reading could be old.
-            if proxy:
-                #Check that it's not older than now - arcint
-                age_of_reading = utc_now() - time_of_reading
-                if age_of_reading.seconds > archive_interval:
-                    # Nothing current, will have to read directly for PurpleAir device.
-                    log.info('Ignoring proxy reading--age: %d seconds.'
-                             % age_of_reading.seconds)
-                    j = None
     except Exception as e:
-        log.info('collect_data: Attempt to fetch from: %s failed: %s.' % (hostname, e))
+        log.info('collect_data: Attempt to fetch from: %s failed: %s.' % (sensor_id, e))
         j = None
 
 
@@ -239,7 +220,7 @@ def collect_data(hostname, port, timeout, archive_interval, proxy = False):
         return None
 
     # create a record
-    log.debug('Successful read from %s.' % hostname)
+    log.debug('Successful read from %s.' % sensor_id)
     return populate_record(time_of_reading.timestamp(), j)
 
 def populate_record(ts, j):
@@ -306,9 +287,8 @@ class Purple(StdService):
             if source.enable:
                 source_count += 1
                 log.info(
-                    'Source %d for PurpleAir readings: %s %s:%s, proxy: %s, timeout: %d' % (
-                    source_count, 'purple-proxy' if source.is_proxy else 'sensor',
-                    source.hostname, source.port, source.is_proxy, source.timeout))
+                    'Source %d for PurpleAir readings: sensor: %s, timeout: %d' % (
+                    source_count, source.sensor_id, source.timeout))
         if source_count == 0:
             log.error('No sources configured for purple extension.  Purple extension is inoperable.')
         else:
@@ -363,15 +343,6 @@ class Purple(StdService):
 
     def configure_sources(config_dict):
         sources = []
-        # Configure Proxies
-        idx = 0
-        while True:
-            idx += 1
-            try:
-                source = Source(config_dict, 'Proxy%d' % idx, True)
-                sources.append(source)
-            except KeyError:
-                break
         # Configure Sensors
         idx = 0
         while True:
@@ -383,50 +354,6 @@ class Purple(StdService):
                 break
 
         return sources
-
-    def get_proxy_version(hostname, port, timeout):
-        try:
-            url = 'http://%s:%s/get-version' % (hostname, port)
-            log.debug('get-proxy-version: url: %s' % url)
-            # If the machine was just rebooted, a temporary failure in name
-            # resolution is likely.  As such, try three times.
-            for i in range(3):
-                try:
-                    r = requests.get(url=url, timeout=timeout)
-                    r.raise_for_status()
-                    break
-                except requests.exceptions.ConnectionError as e:
-                    if i < 2:
-                        log.info('%s: Retrying.' % e)
-                        time.sleep(5)
-                    else:
-                        raise e
-            log.debug('get-proxy-version: r: %s' % r)
-            if r is None:
-                log.debug('get-proxy-version: request returned None')
-                return None
-            j = r.json()
-            log.debug('get_proxy_version: returning version %s for %s.' % (j['version'], hostname))
-            return j['version']
-        except Exception as e:
-            log.info('Could not get version from proxy %s: %s.  Down?' % (hostname, e))
-            return None
-
-    def get_earliest_timestamp(hostname, port, timeout):
-        try:
-            url = 'http://%s:%s/get-earliest-timestamp' % (hostname, port)
-            r = requests.get(url=url, timeout=timeout)
-            r.raise_for_status()
-            log.debug('get-earliest-timestamp: r: %s' % r)
-            if r is None:
-                log.debug('get-earliest-timestamp: request returned None')
-                return None
-            j = r.json()
-            log.debug('get_earliest_timestamp: returning earliest timestamp %s for %s.' % (j['timestamp'], hostname))
-            return j['timestamp']
-        except Exception as e:
-            log.debug('Could not get earliest timestamp from proxy %s: %s.  Down?' % (hostname, e))
-            return None
 
 class DevicePoller:
     def __init__(self, cfg: Configuration):
@@ -695,37 +622,25 @@ if __name__ == "__main__":
                           help='test the data collector')
         parser.add_option('--test-is-sane', dest='sane_test', action='store_true',
                           help='test the is_sane function')
-        parser.add_option('--hostname', dest='hostname', action='store',
-                          help='hostname to use with --test-collector')
-        parser.add_option('--port', dest='port', action='store',
-                          type=int, default=80,
-                          help="port to use with --test-collector. Default is '80'")
+        parser.add_option('--sensor-id', dest='sensor_id', action='store',
+                          help='sensor id to use with --test-collector')
         (options, args) = parser.parse_args()
 
         weeutil.logger.setup('purple', {})
 
         if options.tc:
-            if not options.hostname:
-                parser.error('--test-collector requires --hostname argument')
-            test_collector(options.hostname, options.port)
+            if not options.sensor_id:
+                parser.error('--test-collector requires --sensor-id argument')
+            test_collector(options.sensor_id)
         if options.sane_test:
             test_is_sane()
 
-    def test_collector(hostname, port):
+    def test_collector(sensor_id):
         while True:
-            print(collect_data(hostname, port, 10, 300))
+            print(collect_data(sensor_id, 10, 300))
             time.sleep(5)
 
     def test_is_sane():
-        good_proxy = ('{"DateTime": "2020/03/20T17:16:00z", "current_temp_f": 61,'
-            ' "current_humidity": 49, "current_dewpoint_f": 41, "pressure": 1024.255,'
-            ' "pm1_0_cf_1": 2.39, "pm1_0_atm": 2.39, "p_0_3_um": 641.75,'
-            ' "pm2_5_cf_1": 3.85, "pm2_5_atm": 3.85, "p_0_5_um": 179.98,'
-            ' "pm10_0_cf_1": 5.17, "pm10_0_atm": 5.17, "pm2.5_aqi": 16,'
-            ' "p25aqic": "rgb(8,229,0)", "pm1_0_cf_1_b": 1.86, "pm1_0_atm_b": 1.86,'
-            ' "p_0_3_um_b": 544.5, "pm2_5_cf_1_b": 2.97, "pm2_5_atm_b": 2.97,'
-            ' "p_0_5_um_b": 149.48, "pm10_0_cf_1_b": 3.41, "pm10_0_atm_b": 3.41,'
-            ' "pm2.5_aqi_b": 12, "p25aqic_b": "rgb(4,228,0)"}')
         good_device = ('{"SensorId":"84:f3:eb:36:38:fe","DateTime":"2020/03/20T17:18:02z",'
             '"Geo":"PurpleAir-38fe","Mem":19176,"memfrag":15,"memfb":16360,"memcs":768,'
             '"Id":16220,"lat":37.431599,"lon":-122.111000,"Adc":0.03,"loggingrate":15,'
@@ -759,24 +674,9 @@ if __name__ == "__main__":
             ' "pm2_5_cf_1_b":"nan", "pm2_5_atm_b":"nan", "p_0_5_um_b":"nan",'
             ' "pm10_0_cf_1_b":"nan", "pm10_0_atm_b":"nan",'
             ' "pm2_5_aqi_b":"nan", "p25aqic_b":"rgb(0,255,255)"}')
-        bad_2 = ('{"DateTime":"2020/03/20T16:01:38z","current_temp_f":54,'
-            '"current_humidity":58,"current_dewpoint_f":39,"pressure":1022.78,'
-            '"p25aqic_b":"rgb(19,230,0)","pm2.5_aqi_b":21,"pm1_0_cf_1_b":"nan",'
-            '"p_0_3_um_b":701.02,"pm2_5_cf_1_b":5.15,"p_0_5_um_b":197.89,'
-            '"pm10_0_cf_1_b":6.16,"p_1_0_um_b":35.84,"pm1_0_atm_b":3.11,'
-            '"p_2_5_um_b":4.45,"pm2_5_atm_b":5.15,"p_5_0_um_b":1.24,'
-            '"pm10_0_atm_b":6.16,"p_10_0_um_b":0.96,"p25aqic":"rgb(36,232,0)",'
-            '"pm2.5_aqi":26,"pm1_0_cf_1":3.60,"p_0_3_um":873.50,'
-            '"pm2_5_cf_1":6.13,"p_0_5_um":245.18,"pm10_0_cf_1":6.80,'
-            '"p_1_0_um":37.50,"pm1_0_atm":3.60,"p_2_5_um":6.47,"pm2_5_atm":6.13,'
-            '"p_5_0_um":0.77,"pm10_0_atm":6.80,"p_10_0_um":0.77}')
-        j = json.loads(good_proxy)
-        assert(is_sane(j))
         j = json.loads(good_device)
         assert(is_sane(j))
         j = json.loads(bad_1)
-        assert(not is_sane(j))
-        j = json.loads(bad_2)
         assert(not is_sane(j))
 
     main()

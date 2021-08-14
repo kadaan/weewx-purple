@@ -4,8 +4,7 @@
 ## Description
 
 A WeeWX plugin that gets its PurpleAir sensor readings either directly
-from the PurpleAir sensor or from a
-[purple-proxy](https://github.com/chaunceygardiner/weewx-purple) service.
+from the PurpleAir sensor.
 
 Copyright (C)2020 by John A Kline (john@johnkline.com)
 
@@ -56,23 +55,8 @@ is the [RGBint](https://www.shodor.org/stella2java/rgbint.html) value
 If the sensor is an outdoor sensor, the fields inserted are the averages
 of the two sensors.
 
-Earlier versions of purple-proxy wrote to a separate database.  This is no
-longer the case.
-
 A skin is provided to show a sample report:
 ![PurpleReport](PurpleReport.jpg)
-
-### What's a purple proxy?
-
-purple-proxy is optional when using weewx-purple.  purple-proxy
-returns an average over the archive period when queried.  Use of purple-proxy
-is not recommended (and strongly discouraged for all but the most Unix/Linux
-savy.  The install is rather crude and has only been tested on Debian.
-If in doubt, skip purple-proxy and query the PurpleAir devices directly.
-
-See `weewx-purple` and `purple-proxy` in action on the following pages:
-* [Weatherboard&trade; Report](https://www.paloaltoweather.com/weatherboard/)
-* [LiveSeasons Report](https://www.paloaltoweather.com/index.html).
 
 # Installation Instructions
 
@@ -93,54 +77,22 @@ If you don't meet the following requirements, don't install this extension.
 
 1. Edit the `Purple` section of weewx.conf (which was created by the install
    above).  PurpleAir sensors are specified with section names of `Sensor1`,
-   `Sensor2`, `Sensor3`, etc.  Proxies are specified as `Proxy1`, `Proxy2`,
-   `Proxy3`, etc.  There is no limit on how many sensors and proxies can
-   be configured; but the numbering must be sonsecutive.  The order in which
-   sensors/proxies are interrogated is first the proxies, low numbers to high;
-   then the sensors, low numbers to high.  Once a proxy or sensor replies,
-   no further proxies/sensors are interrogated for the current polling round.
+   `Sensor2`, `Sensor3`, etc.  There is no limit on how many sensors can
+   be configured; but the numbering must be consecutive.  The order in which
+   sensors are interrogated is low numbers to high.  Once a sensor replies,
+   no further sensors are interrogated for the current polling round.
 
    ```
    [Purple]
        [[Sensor]]
            enable = true
-           hostname = purple-air
-           port = 80
+           sensor_id = 123
            timeout = 15
        [[Sensor2]]
            enable = false
-           hostname = purple-air2
-           port = 80
+           sensor_id = 456
            timeout = 15
-       [[Proxy1]]
-           enable = false
-           hostname = proxy
-           port = 8000
-           timeout = 5
-           starup_timeout = 60
-       [[Proxy2]]
-           enable = false
-           hostname = proxy2
-           port = 8000
-           timeout = 5
-           starup_timeout = 60
-       [[Proxy3]]
-           enable = false
-           hostname = proxy3
-           port = 8000
-           timeout = 5
-           starup_timeout = 60
-       [[Proxy4]]
-           enable = false
-           hostname = proxy4
-           port = 8000
-           timeout = 5
-           starup_timeout = 60
    ```
-
-1. If you are Unix/Linux savy, and are willing to work with a crude
-   installation procedure, install
-   [purple-proxy](https://github.com/chaunceygardiner/purple-proxy).
 
 1. Restart WeeWX
 
