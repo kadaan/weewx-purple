@@ -279,10 +279,7 @@ def populate_new_loop_packet(cfg, event):
     log.debug('new_loop_packet(%s)' % event)
     with cfg.lock:
         log.debug('new_loop_packet: cfg.concentrations: %s' % cfg.concentrations)
-        if cfg.concentrations is not None and \
-                cfg.concentrations.timestamp is not None and \
-                cfg.concentrations.timestamp + \
-                cfg.archive_interval >= time.time():
+        if cfg.concentrations is not None:
             log.debug('Time of reading being inserted: %s' % timestamp_to_string(cfg.concentrations.timestamp))
             # Insert pressure, pm1_0, pm2_5, pm10_0, aqi and aqic into loop packet.
             if cfg.concentrations.pressure is not None:
