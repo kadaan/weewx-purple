@@ -348,7 +348,7 @@ class Purple(StdService):
         while True:
             idx += 1
             try:
-                source = Source(config_dict, 'Sensor%d' % idx, False)
+                source = Source(config_dict, 'Sensor%d' % idx)
                 sources.append(source)
             except KeyError:
                 break
