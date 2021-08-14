@@ -98,6 +98,7 @@ class Concentrations:
     pm2_5_cf_1_b    : Optional[float]
     current_temp_f  : int
     current_humidity: int
+    pressure        : float
 
 @dataclass
 class Configuration:
@@ -140,6 +141,7 @@ def get_concentrations(cfg: Configuration):
                     pm2_5_cf_1_b     = None, # If there is a second sensor, this will be updated below.
                     current_temp_f   = to_int(record['current_temp_f']),
                     current_humidity = to_int(record['current_humidity']),
+                    pressure         = to_float(record['pressure']),
                 )
                 # If there is a 'b' sensor, add it in and average the readings
                 log.debug('get_concentrations: concentrations BEFORE averaing in b reading: %s' % concentrations)
@@ -330,7 +332,10 @@ class Purple(StdService):
                     self.cfg.concentrations.timestamp + \
                     self.cfg.archive_interval >= time.time():
                 log.debug('Time of reading being inserted: %s' % timestamp_to_string(self.cfg.concentrations.timestamp))
-                # Insert pm1_0, pm2_5, pm10_0, aqi and aqic into loop packet.
+                # Insert pressure, pm1_0, pm2_5, pm10_0, aqi and aqic into loop packet.
+                if self.cfg.concentrations.pressure is not None:
+                    event.packet['pressure'] = self.cfg.concentrations.pressure
+                    log.debug('Inserted packet[pressure]: %f into packet.' % event.packet['pressure'])
                 if self.cfg.concentrations.pm1_0 is not None:
                     event.packet['pm1_0'] = self.cfg.concentrations.pm1_0
                     log.debug('Inserted packet[pm1_0]: %f into packet.' % event.packet['pm1_0'])
@@ -514,7 +519,7 @@ class AQI(weewx.xtypes.XType):
             return (255 << 16) + (255 << 8) # Yellow
         elif pm2_5_aqi <=  150:
             return (255 << 16) + (140 << 8) # Orange
-        elif pm2_5_aqi <= 200: 
+        elif pm2_5_aqi <= 200:
             return 255 << 16                # Red
         elif pm2_5_aqi <= 300:
             return (128 << 16) + 128        # Purple
