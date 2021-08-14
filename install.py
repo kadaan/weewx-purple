@@ -21,8 +21,8 @@ import weewx
 from setup import ExtensionInstaller
 
 def loader():
-    if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 7):
-        sys.exit("weewx-purple requires Python 3.7 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
+    if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 6):
+        sys.exit("weewx-purple requires Python 3.6 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
 
     if weewx.__version__ < "4":
         sys.exit("weewx-purple requires WeeWX 4, found %s" % weewx.__version__)
@@ -47,40 +47,15 @@ class PurpleInstaller(ExtensionInstaller):
                     },
                 },
                 'Purple': {
-                    'Proxy1'   : {
-                        'enable'         : False,
-                        'hostname'       : 'proxy1',
-                        'port'           : '8000',
-                        'timeout'        : '5',
-                    },
-                    'Proxy2' : {
-                        'enable'         : False,
-                        'hostname'       : 'proxy2',
-                        'port'           : '8000',
-                        'timeout'        : '5',
-                    },
-                    'Proxy3'  : {
-                        'enable'         : False,
-                        'hostname'       : 'proxy3',
-                        'port'           : '8000',
-                        'timeout'        : '5',
-                    },
-                    'Proxy4': {
-                        'enable'         : False,
-                        'hostname'       : 'proxy4',
-                        'port'           : '8000',
-                        'timeout'        : '5',
-                    },
                     'Sensor1'  : {
                         'enable'     : True,
-                        'hostname'   : 'purple-air',
+                        'sensor_id'  : '123',
                         'port'       : '80',
                         'timeout'    : '15',
                     },
                     'Sensor2': {
                         'enable'     : False,
-                        'hostname'   : 'purple-air2',
-                        'port'       : '80',
+                        'sensor_id'  : '456',
                         'timeout'    : '15',
                     },
                 },

@@ -63,7 +63,8 @@ A skin is provided to show a sample report:
 If you don't meet the following requirements, don't install this extension.
   * WeeWX 4
   * Using WeeWX 4's new wview_extended schema.
-  * Python 3.7 or greater
+  * Python 3.6 or greater
+  * Pip Package 'dataclasses' installed
 
 1. Download the lastest release, weewx-purple-3.0.2.zip, from the
    [GitHub Repository](https://github.com/chaunceygardiner/weewx-purple).
