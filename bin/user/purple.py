@@ -134,7 +134,7 @@ def get_concentrations(cfg: Configuration):
                     pm2_5_cf_1_b     = None, # If there is a second sensor, this will be updated below.
                     current_temp_f   = to_int(record['current_temp_f']),
                     current_humidity = to_int(record['current_humidity']),
-                    pressure         = to_float(record['pressure']),
+                    pressure         = to_float(record['pressure']) * 33.863886666667,
                 )
                 # If there is a 'b' sensor, add it in and average the readings
                 log.debug('get_concentrations: concentrations BEFORE averaing in b reading: %s' % concentrations)
