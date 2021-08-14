@@ -329,7 +329,7 @@ class Purple(StdService):
             concentrations=None,
             archive_interval=int(config_dict['StdArchive']['archive_interval']),
             archive_delay=to_int(config_dict['StdArchive'].get('archive_delay', 15)),
-            poll_interval=5,
+            poll_interval=to_int(self.config_dict.get('poll_interval', 30)),
             sources=Purple.configure_sources(self.config_dict))
         with self.cfg.lock:
             self.cfg.concentrations = get_concentrations(self.cfg)
