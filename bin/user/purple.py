@@ -256,9 +256,6 @@ def populate_record(ts, j):
 
     pressure = get_and_update_missed(0, float, 'pressure')
     if pressure is not None:
-        # convert pressure from mbar to US units.
-        # FIXME: is there a cleaner way to do this
-        pressure, units, group = weewx.units.convertStd((pressure, 'mbar', 'group_pressure'), weewx.US)
         record['pressure'] = pressure
 
     # for each concentration counter, grab A, B and the average of the A and B channels and push into the record
