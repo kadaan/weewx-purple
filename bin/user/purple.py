@@ -478,7 +478,6 @@ class AQI(weewx.xtypes.XType):
 
     @staticmethod
     def get_scalar(obs_type, record, db_manager=None):
-        log.debug('get_scalar(%s)' % obs_type)
         if obs_type not in ['pm2_5_aqi', 'pm2_5_aqi_color']:
             raise weewx.UnknownType(obs_type)
         log.debug('get_scalar(%s)' % obs_type)
