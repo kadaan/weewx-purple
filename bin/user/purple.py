@@ -82,6 +82,7 @@ class Source:
         # Raise KeyEror if name not in dictionary.
         source_dict = config_dict[name]
         self.enable = to_bool(source_dict.get('enable', False))
+        self.api_key = source_dict.get('api_key', '')
         self.sensor_id = source_dict.get('sensor_id', '')
         self.timeout = to_int(source_dict.get('timeout', 10))
 
@@ -119,7 +120,8 @@ def utc_now():
 def get_concentrations(cfg: Configuration):
     for source in cfg.sources:
         if source.enable:
-            record = collect_data(source.sensor_id,
+            record = collect_data(source.api_key,
+                                  source.sensor_id,
                                   source.timeout,
                                   cfg.archive_interval)
             if record is not None:
@@ -132,20 +134,20 @@ def get_concentrations(cfg: Configuration):
                     continue
                 concentrations = Concentrations(
                     timestamp=reading_ts,
-                    pm1_0=to_float(record['pm1_0_atm']),
-                    pm10_0=to_float(record['pm10_0_atm']),
-                    pm2_5_cf_1=to_float(record['pm2_5_cf_1']),
+                    pm1_0=to_float(record['pm1.0_atm']),
+                    pm10_0=to_float(record['pm10.0_atm']),
+                    pm2_5_cf_1=to_float(record['pm2.5_cf_1']),
                     pm2_5_cf_1_b=None,  # If there is a second sensor, this will be updated below.
-                    temp_f=to_int(record['temp_f']),
+                    temp_f=to_int(record['temperature']),
                     humidity=to_int(record['humidity']),
                     pressure=to_float(record['pressure']),
                 )
                 # If there is a 'b' sensor, add it in and average the readings
-                log.debug('get_concentrations: concentrations BEFORE averaing in b reading: %s' % concentrations)
-                if 'pm1_0_atm_b' in record:
-                    concentrations.pm1_0 = (concentrations.pm1_0 + to_float(record['pm1_0_atm_b'])) / 2.0
-                    concentrations.pm2_5_cf_1_b = to_float(record['pm2_5_cf_1_b'])
-                    concentrations.pm10_0 = (concentrations.pm10_0 + to_float(record['pm10_0_atm_b'])) / 2.0
+                log.debug('get_concentrations: concentrations BEFORE averaging in b reading: %s' % concentrations)
+                if 'pm1.0_atm_b' in record:
+                    concentrations.pm1_0 = (concentrations.pm1_0 + to_float(record['pm1.0_atm_b'])) / 2.0
+                    concentrations.pm2_5_cf_1_b = to_float(record['pm2.5_cf_1_b'])
+                    concentrations.pm10_0 = (concentrations.pm10_0 + to_float(record['pm10.0_atm_b'])) / 2.0
                 log.debug('get_concentrations: concentrations: %s' % concentrations)
                 return concentrations
     log.error('Could not get concentrations from any source.')
@@ -174,45 +176,43 @@ def is_type(j: Dict[str, Any], t, names: List[str]) -> bool:
 
 
 def is_sane(j: Dict[str, Any]) -> bool:
-    if not is_type(j, list, ['results']):
+    if not is_type(j, dict, ['sensor']):
         return False
 
-    if len(j['results']) < 1:
-        return False
-
-    time_of_reading = datetime_from_reading(j['results'][0]['LastSeen'])
+    time_of_reading = datetime_from_reading(j['time_stamp'])
     if not isinstance(time_of_reading, datetime.datetime):
-        log.info('DateTime is not an instance of datetime: %s' % j['results'][0]['LastSeen'])
+        log.info('DateTime is not an instance of datetime: %s' % j['time_stamp'])
         return False
 
-    if not is_type(j['results'][0], int, ['temp_f', 'humidity']):
+    if not is_type(j['sensor'], int, ['temperature', 'humidity']):
         return False
 
-    if not is_type(j['results'][0], float, ['pressure']):
+    if not is_type(j['sensor'], float, ['pressure']):
         return False
 
     # Sensor A
-    if not is_type(j['results'][0], float, ['pm1_0_cf_1', 'pm1_0_atm', 'p_0_3_um', 'pm2_5_cf_1',
-                                            'pm2_5_atm', 'p_0_5_um', 'pm10_0_cf_1', 'pm10_0_atm']):
+    if not is_type(j['sensor'], float, ['pm1.0_cf_1_a', 'pm1.0_atm_a', '0.3_um_count_a', 'pm2.5_cf_1_a',
+                                        'pm2.5_atm_a', '0.5_um_count_a', 'pm10.0_cf_1_a', 'pm10.0_atm_a',
+                                        'pm1.0_cf_1_b', 'pm1.0_atm_b', '0.3_um_count_b', 'pm2.5_cf_1_b',
+                                        'pm2.5_atm_b', '0.5_um_count_b', 'pm10.0_cf_1_b', 'pm10.0_atm_b']):
         return False
-
-    # Sensor B
-    if len(j['results']) > 1:
-        if not is_type(j['results'][1], float, ['pm1_0_cf_1', 'pm1_0_atm', 'p_0_3_um', 'pm2_5_cf_1',
-                                                'pm2_5_atm', 'p_0_5_um', 'pm10_0_cf_1', 'pm10_0_atm']):
-            return False
 
     return True
 
 
-def collect_data(sensor_id, timeout, archive_interval):
+def collect_data(api_key, sensor_id, timeout, archive_interval):
     j = None
-    url = 'https://www.purpleair.com/json?show=%s' % sensor_id
-
+    url = 'https://api.purpleair.com/v1/sensors/%s' % sensor_id
     try:
+        #: 01603183-5DD7-11EC-B9BF-42010A800003
         # fetch data
         log.debug('collect_data: fetching from url: %s, timeout: %d' % (url, timeout))
-        r = requests.get(url=url, timeout=timeout)
+        headers = {'X-API-Key': api_key}
+        fields = {'fields': 'temperature,humidity,pressure,pm1.0_cf_1_a,pm1.0_atm_a,0.3_um_count_a,'
+                            'pm2.5_cf_1_a,pm2.5_atm_a,0.5_um_count_a,pm10.0_cf_1_a,pm10.0_atm_a,'
+                            'pm1.0_cf_1_b,pm1.0_atm_b,0.3_um_count_b,pm2.5_cf_1_b,pm2.5_atm_b,'
+                            '0.5_um_count_b,pm10.0_cf_1_b,pm10.0_atm_b'}
+        r = requests.get(url=url, timeout=timeout, headers=headers, params=fields)
         r.raise_for_status()
         log.debug('collect_data: %s returned %r' % (sensor_id, r))
         if r:
@@ -223,7 +223,7 @@ def collect_data(sensor_id, timeout, archive_interval):
             if not is_sane(j):
                 log.info('purpleair reading not sane: %s' % j)
                 return None
-            time_of_reading = datetime_from_reading(j['results'][0]['LastSeen'])
+            time_of_reading = datetime_from_reading(j['time_stamp'])
     except Exception as e:
         log.info('collect_data: Attempt to fetch from: %s failed: %s.' % (sensor_id, e))
         j = None
@@ -244,17 +244,17 @@ def populate_record(ts, j):
     # put items into record
     missed = []
 
-    def get_and_update_missed(r, t, key):
-        if key in j['results'][r]:
-            return t(j['results'][r][key])
+    def get_and_update_missed(t, key):
+        if key in j['sensor']:
+            return t(j['sensor'][key])
         else:
             missed.append(key)
             return None
 
-    record['temp_f'] = get_and_update_missed(0, int, 'temp_f')
-    record['humidity'] = get_and_update_missed(0, int, 'humidity')
+    record['temperature'] = get_and_update_missed(int, 'temperature')
+    record['humidity'] = get_and_update_missed(int, 'humidity')
 
-    pressure = get_and_update_missed(0, float, 'pressure')
+    pressure = get_and_update_missed(float, 'pressure')
     if pressure is not None:
         # convert pressure from mbar to US units.
         # FIXME: is there a cleaner way to do this
@@ -262,12 +262,12 @@ def populate_record(ts, j):
         record['pressure'] = pressure
 
     # for each concentration counter, grab A, B and the average of the A and B channels and push into the record
-    for key in ['pm1_0_cf_1', 'pm1_0_atm', 'pm2_5_cf_1', 'pm2_5_atm', 'pm10_0_cf_1', 'pm10_0_atm']:
-        record[key] = get_and_update_missed(0, float, key)
-        if key in j['results'][1]:
-            key_b = key + '_b'
-            record[key_b] = get_and_update_missed(1, float, key)
-            record[key + '_avg'] = (record[key] + record[key_b]) / 2.0
+    for key in ['pm1.0_cf_1', 'pm1.0_atm', 'pm2.5_cf_1', 'pm2.5_atm', 'pm10.0_cf_1', 'pm10.0_atm']:
+        key_a = key + '_a'
+        key_b = key + '_b'
+        record[key] = get_and_update_missed(float, key_a)
+        record[key_b] = get_and_update_missed(float, key_b)
+        record[key + '_avg'] = (record[key] + record[key_b]) / 2.0
 
     if missed:
         log.info("Sensor didn't report field(s): %s" % ','.join(missed))
@@ -638,6 +638,8 @@ if __name__ == "__main__":
                           help="Use configuration file FILE. Default is /etc/weewx/weewx.conf or /home/weewx/weewx.conf")
         parser.add_option('--test-collector', dest='tc', action='store_true',
                           help='test the data collector')
+        parser.add_option('--api-key', dest='api_key', action='store',
+                          help='api key to use with --test-collector')
         parser.add_option('--sensor-id', dest='sensor_id', action='store',
                           help='sensor id to use with --test-collector')
         (options, args) = parser.parse_args()
@@ -645,11 +647,14 @@ if __name__ == "__main__":
         weeutil.logger.setup('purple', {})
 
         if options.tc:
+            if not options.api_key:
+                parser.error('--test-collector requires --api-key argument')
             if not options.sensor_id:
                 parser.error('--test-collector requires --sensor-id argument')
             config_dict = {
                 'Sensor1': {
                     'enable': True,
+                    'api_key': options.api_key,
                     'sensor_id': options.sensor_id
                 }
             }
@@ -669,9 +674,9 @@ if __name__ == "__main__":
             json.dump(event.packet, sys.stdout, indent=4)
 
 
-    def test_collector(sensor_id):
+    def test_collector(api_key, sensor_id):
         while True:
-            print(collect_data(sensor_id, 10, 300))
+            print(collect_data(api_key, sensor_id, 10, 300))
             time.sleep(5)
 
 
