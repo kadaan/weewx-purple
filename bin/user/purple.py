@@ -22,13 +22,14 @@ import datetime
 import json
 import logging
 import math
+import typing
+
 import requests
 import sys
 import threading
 import time
 
 from dateutil import tz
-from dateutil.parser import parse
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -58,23 +59,31 @@ if weewx.__version__ < "4":
         "weewx-purple requires WeeWX 4, found %s" % weewx.__version__)
 
 # Set up observation types not in weewx.units
+weewx.units.USUnits['group_air_quality_index'] = 'aqi'
+weewx.units.MetricUnits['group_air_quality_index'] = 'aqi'
+weewx.units.MetricWXUnits['group_air_quality_index'] = 'aqi'
 
-weewx.units.USUnits['air_quality_index'] = 'aqi'
-weewx.units.MetricUnits['air_quality_index'] = 'aqi'
-weewx.units.MetricWXUnits['air_quality_index'] = 'aqi'
+weewx.units.USUnits['group_air_quality_color'] = 'aqi_color'
+weewx.units.MetricUnits['group_air_quality_color'] = 'aqi_color'
+weewx.units.MetricWXUnits['group_air_quality_color'] = 'aqi_color'
 
-weewx.units.USUnits['air_quality_color'] = 'aqi_color'
-weewx.units.MetricUnits['air_quality_color'] = 'aqi_color'
-weewx.units.MetricWXUnits['air_quality_color'] = 'aqi_color'
+weewx.units.USUnits['group_concentration'] = 'microgram_per_meter_cubed'
+weewx.units.MetricUnits['group_concentration'] = 'microgram_per_meter_cubed'
+weewx.units.MetricWXUnits['group_concentration'] = 'microgram_per_meter_cubed'
 
 weewx.units.default_unit_label_dict['aqi'] = ' AQI'
 weewx.units.default_unit_label_dict['aqi_color'] = ' RGB'
+weewx.units.default_unit_label_dict['microgram_per_meter_cubed'] = u'µg/m³'
 
 weewx.units.default_unit_format_dict['aqi'] = '%d'
 weewx.units.default_unit_format_dict['aqi_color'] = '%d'
+weewx.units.default_unit_format_dict['microgram_per_meter_cubed'] = '%.3f'
 
-weewx.units.obs_group_dict['pm2_5_aqi'] = 'air_quality_index'
-weewx.units.obs_group_dict['pm2_5_aqi_color'] = 'air_quality_color'
+weewx.units.obs_group_dict['pm1_0'] = 'group_concentration'
+weewx.units.obs_group_dict['pm2_5'] = 'group_concentration'
+weewx.units.obs_group_dict['pm10_0'] = 'group_concentration'
+weewx.units.obs_group_dict['pm2_5_aqi'] = 'group_air_quality_index'
+weewx.units.obs_group_dict['pm2_5_aqi_color'] = 'group_air_quality_color'
 
 
 class Source:
@@ -102,7 +111,7 @@ class Concentrations:
 @dataclass
 class Configuration:
     lock: threading.Lock
-    concentrations: Concentrations  # Controlled by lock
+    concentrations: typing.Union[Concentrations, None]  # Controlled by lock
     archive_interval: int  # Immutable
     archive_delay: int  # Immutable
     poll_interval: int  # Immutable
@@ -190,7 +199,6 @@ def is_sane(j: Dict[str, Any]) -> bool:
     if not is_type(j['sensor'], float, ['pressure']):
         return False
 
-    # Sensor A
     if not is_type(j['sensor'], float, ['pm1.0_cf_1_a', 'pm1.0_atm_a', '0.3_um_count_a', 'pm2.5_cf_1_a',
                                         'pm2.5_atm_a', '0.5_um_count_a', 'pm10.0_cf_1_a', 'pm10.0_atm_a',
                                         'pm1.0_cf_1_b', 'pm1.0_atm_b', '0.3_um_count_b', 'pm2.5_cf_1_b',
@@ -200,8 +208,9 @@ def is_sane(j: Dict[str, Any]) -> bool:
     return True
 
 
-def collect_data(api_key, sensor_id, timeout, archive_interval):
+def collect_data(api_key, sensor_id, timeout, _):
     j = None
+    time_of_reading = None
     url = 'https://api.purpleair.com/v1/sensors/%s' % sensor_id
     try:
         #: 01603183-5DD7-11EC-B9BF-42010A800003
@@ -228,7 +237,7 @@ def collect_data(api_key, sensor_id, timeout, archive_interval):
         log.info('collect_data: Attempt to fetch from: %s failed: %s.' % (sensor_id, e))
         j = None
 
-    if j is None:
+    if j is None or time_of_reading is None:
         return None
 
     # create a record
@@ -244,22 +253,16 @@ def populate_record(ts, j):
     # put items into record
     missed = []
 
-    def get_and_update_missed(t, key):
-        if key in j['sensor']:
-            return t(j['sensor'][key])
+    def get_and_update_missed(t, k):
+        if k in j['sensor']:
+            return t(j['sensor'][k])
         else:
-            missed.append(key)
+            missed.append(k)
             return None
 
     record['temperature'] = get_and_update_missed(int, 'temperature')
     record['humidity'] = get_and_update_missed(int, 'humidity')
-
-    pressure = get_and_update_missed(float, 'pressure')
-    if pressure is not None:
-        # convert pressure from mbar to US units.
-        # FIXME: is there a cleaner way to do this
-        pressure, units, group = weewx.units.convertStd((pressure, 'mbar', 'group_pressure'), weewx.US)
-        record['pressure'] = pressure
+    record['pressure'] = get_and_update_missed(float, 'pressure')
 
     # for each concentration counter, grab A, B and the average of the A and B channels and push into the record
     for key in ['pm1.0_cf_1', 'pm1.0_atm', 'pm2.5_cf_1', 'pm2.5_atm', 'pm10.0_cf_1', 'pm10.0_atm']:
@@ -275,18 +278,28 @@ def populate_record(ts, j):
     return record
 
 
-def populate_new_loop_packet(cfg, event):
+def populate_new_loop_packet(cfg, default_units, event):
     log.debug('new_loop_packet(%s)' % event)
+    packet = event.packet
+    if 'usUnits' in packet:
+        converter = weewx.units.StdUnitConverters[packet['usUnits']]
+    else:
+        converter = weewx.units.StdUnitConverters[default_units]
+
     with cfg.lock:
         log.debug('new_loop_packet: cfg.concentrations: %s' % cfg.concentrations)
         if cfg.concentrations is not None:
             log.debug('Time of reading being inserted: %s' % timestamp_to_string(cfg.concentrations.timestamp))
             # Insert pressure, pm1_0, pm2_5, pm10_0, aqi and aqic into loop packet.
             if cfg.concentrations.pressure is not None:
-                event.packet['pressure'] = cfg.concentrations.pressure
+                pressure = (cfg.concentrations.pressure, 'mbar', 'group_pressure')
+                converted = converter.convert(pressure)
+                event.packet['pressure'] = converted[0]
                 log.debug('Inserted packet[pressure]: %f into packet.' % event.packet['pressure'])
             if cfg.concentrations.pm1_0 is not None:
-                event.packet['pm1_0'] = cfg.concentrations.pm1_0
+                pm1_0 = (cfg.concentrations.pm1_0, 'microgram_per_meter_cubed', 'group_concentration')
+                converted = converter.convert(pm1_0)
+                event.packet['pm1_0'] = converted[0]
                 log.debug('Inserted packet[pm1_0]: %f into packet.' % event.packet['pm1_0'])
             if cfg.concentrations.pm2_5_cf_1_b is not None:
                 b_reading = cfg.concentrations.pm2_5_cf_1_b
@@ -296,17 +309,27 @@ def populate_new_loop_packet(cfg, event):
                     and b_reading is not None
                     and cfg.concentrations.humidity is not None
                     and cfg.concentrations.temp_f):
-                event.packet['pm2_5'] = AQI.compute_pm2_5_us_epa_correction(
+                pm2_5 = (AQI.compute_pm2_5_us_epa_correction(
                     cfg.concentrations.pm2_5_cf_1, b_reading,
-                    cfg.concentrations.humidity, cfg.concentrations.temp_f)
+                    cfg.concentrations.humidity, cfg.concentrations.temp_f),
+                            'microgram_per_meter_cubed', 'group_concentration')
+                converted = converter.convert(pm2_5)
+                event.packet['pm2_5'] = converted[0]
                 log.debug('Inserted packet[pm2_5]: %f into packet.' % event.packet['pm2_5'])
             if cfg.concentrations.pm10_0 is not None:
-                event.packet['pm10_0'] = cfg.concentrations.pm10_0
+                pm10_0 = (cfg.concentrations.pm10_0, 'microgram_per_meter_cubed', 'group_concentration')
+                converted = converter.convert(pm10_0)
+                event.packet['pm10_0'] = converted[0]
                 log.debug('Inserted packet[pm10_0]: %f into packet.' % event.packet['pm10_0'])
             if 'pm2_5' in event.packet:
-                event.packet['pm2_5_aqi'] = AQI.compute_pm2_5_aqi(event.packet['pm2_5'])
+                pm2_5_aqi = (AQI.compute_pm2_5_aqi(event.packet['pm2_5']), 'aqi', 'group_air_quality_index')
+                converted = converter.convert(pm2_5_aqi)
+                event.packet['pm2_5_aqi'] = converted[0]
             if 'pm2_5_aqi' in event.packet:
-                event.packet['pm2_5_aqi_color'] = AQI.compute_pm2_5_aqi_color(event.packet['pm2_5_aqi'])
+                pm2_5_aqi_color = (AQI.compute_pm2_5_aqi_color(event.packet['pm2_5_aqi']), 'aqi_color',
+                                   'group_air_quality_color')
+                converted = converter.convert(pm2_5_aqi_color)
+                event.packet['pm2_5_aqi_color'] = converted[0]
         else:
             log.error('Found no fresh concentrations to insert.')
 
@@ -320,6 +343,8 @@ class Purple(StdService):
 
         self.engine = engine
         self.config_dict = config_dict.get('Purple', {})
+        self.default_units = self.config_dict.get('usUnits', 'US').upper()
+        self.default_units = weewx.units.unit_constants[self.default_units]
 
         self.cfg = Configuration(
             lock=threading.Lock(),
@@ -353,8 +378,9 @@ class Purple(StdService):
             self.bind(weewx.NEW_LOOP_PACKET, self.new_loop_packet)
 
     def new_loop_packet(self, event):
-        populate_new_loop_packet(self.cfg, event)
+        populate_new_loop_packet(self.cfg, self.default_units, event)
 
+    @staticmethod
     def configure_sources(config_dict):
         sources = []
         # Configure Sensors
@@ -476,8 +502,7 @@ class AQI(weewx.xtypes.XType):
         val = 0.541 * (pm2_5_cf_1 + pm2_5_cf_1_b) / 2.0 - 0.0618 * humidity + 0.00534 * temp_f + 3.634
         return val if val >= 0.0 else 0.0
 
-    @staticmethod
-    def get_scalar(obs_type, record, db_manager=None):
+    def get_scalar(self, obs_type, record, db_manager=None):
         if obs_type not in ['pm2_5_aqi', 'pm2_5_aqi_color']:
             raise weewx.UnknownType(obs_type)
         log.debug('get_scalar(%s)' % obs_type)
@@ -486,12 +511,14 @@ class AQI(weewx.xtypes.XType):
             raise weewx.CannotCalculate(obs_type)
         if 'pm2_5' not in record:
             # Returning CannotCalculate causes exception in ImageGenerator, return UnknownType instead.
-            # ERROR weewx.reportengine: Caught unrecoverable exception in generator 'weewx.imagegenerator.ImageGenerator'
+            # ERROR weewx.reportengine: Caught unrecoverable exception in generator
+            #       'weewx.imagegenerator.ImageGenerator'
             log.debug('get_scalar called where record does not contain pm2_5.')
             raise weewx.UnknownType(obs_type)
         if record['pm2_5'] is None:
             # Returning CannotCalculate causes exception in ImageGenerator, return UnknownType instead.
-            # ERROR weewx.reportengine: Caught unrecoverable exception in generator 'weewx.imagegenerator.ImageGenerator'
+            # ERROR weewx.reportengine: Caught unrecoverable exception in generator
+            #       'weewx.imagegenerator.ImageGenerator'
             # This will happen for any catchup records inserted at weewx startup.
             log.debug('get_scalar called where record[pm2_5] is None.')
             raise weewx.UnknownType(obs_type)
@@ -508,8 +535,8 @@ class AQI(weewx.xtypes.XType):
             # Don't have everything we need. Raise an exception.
             raise weewx.CannotCalculate(obs_type)
 
-    @staticmethod
-    def get_series(obs_type, timespan, db_manager, aggregate_type=None, aggregate_interval=None):
+    def get_series(self, obs_type, timespan, db_manager, aggregate_type=None,
+                   aggregate_interval=None):
         """Get a series, possibly with aggregation.
         """
 
@@ -635,13 +662,16 @@ if __name__ == "__main__":
         import optparse
         parser = optparse.OptionParser(usage=usage)
         parser.add_option('--config', dest='cfgfn', type=str, metavar="FILE",
-                          help="Use configuration file FILE. Default is /etc/weewx/weewx.conf or /home/weewx/weewx.conf")
+                          help="Use configuration file FILE. "
+                               "Default is /etc/weewx/weewx.conf or /home/weewx/weewx.conf")
         parser.add_option('--test-collector', dest='tc', action='store_true',
                           help='test the data collector')
         parser.add_option('--api-key', dest='api_key', action='store',
                           help='api key to use with --test-collector')
         parser.add_option('--sensor-id', dest='sensor_id', action='store',
                           help='sensor id to use with --test-collector')
+        parser.add_option('--unit-system', dest='unit_system', action='store', default="US",
+                          choices=["US", "METRICWX", "METRIC"], help='unit system to use with --test-collector')
         (options, args) = parser.parse_args()
 
         weeutil.logger.setup('purple', {})
@@ -669,7 +699,7 @@ if __name__ == "__main__":
                 poll_interval=5,
                 sources=[Source(config_dict, 'Sensor1')])
             cfg.concentrations = get_concentrations(cfg)
-            populate_new_loop_packet(cfg, event)
+            populate_new_loop_packet(cfg, weewx.units.unit_constants[options.unit_system], event)
 
             json.dump(event.packet, sys.stdout, indent=4)
 
